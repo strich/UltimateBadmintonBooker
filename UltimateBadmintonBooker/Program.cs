@@ -21,18 +21,22 @@ namespace UltimateBadmintonBooker
         public IList<string> UserNames { get; set; }
         [Option('p', "Passwords", Separator = ',', Required = true, HelpText = "Login passwords.")]
         public IList<string> Passwords { get; set; }
+        [Option('r', "ReverseBooking", Required = false, HelpText = "Book available courts in reverse order.")]
+        public bool ReverseBooking { get; set; } = false;
     }
 
     class BrowserInstance 
     {
+        static int _succeeded = 0;
         IWebDriver _driver;
         string _username = "";
         string _password = "";
-        int _courtOffset;
+        int _browserInstance;
+        bool _interrupt = false;
 
         public BrowserInstance(int courtOffset, string username, string password)
         {
-            _courtOffset = courtOffset;
+            _browserInstance = courtOffset;
             _username = username;
             _password = password;
         }
@@ -51,17 +55,24 @@ namespace UltimateBadmintonBooker
             Login();
 
             bool result = false;
-            while (!result)
+            while (!result && !_interrupt)
             {
                 result = TryBookCourt();
                 if(result)
                 {
-                    result = TrySubmitCart();
-                }
+                    result = TrySubmitCart(); 
+                }               
+                if (!result)
+                    Thread.Sleep(300);
+            }
+            if (result)
+                Interlocked.Increment(ref _succeeded);
+        }
 
-                Thread.Sleep(300);
-            }           
-        }        
+        public void Interrupt()
+        {
+            _interrupt = true;
+        }
 
         public bool TryBookCourt()
         {
@@ -89,8 +100,16 @@ namespace UltimateBadmintonBooker
 
             addToBasketBtn.Click();
             var courtSelector = new SelectElement(_driver.FindElement(By.XPath(".//*[@id='subLocSelect']")));
-            //courtSelector.SelectByIndex(_courtOffset);
-            Console.WriteLine($"Found {courtSelector.Options.Count} courts available.");
+            int optionCount = courtSelector.Options.Count;
+            int index = -1;
+            if (optionCount > 0)
+            {
+                var lastIndex = optionCount - 1;
+                var rawIndex = Program.Options.ReverseBooking ? lastIndex - _browserInstance + _succeeded : _browserInstance - _succeeded;
+                index = Math.Min(Math.Max(rawIndex, 0), lastIndex);
+                courtSelector.SelectByIndex(index);
+            }
+            Console.WriteLine($"Instance {_browserInstance} found {optionCount} courts available. Selected: {(index == -1 ? "None" : index.ToString())}");
             var submitCourtBtn = _driver.FindElement(By.XPath("//span[text()='OK']"));
             submitCourtBtn.Click();
         }
@@ -104,7 +123,7 @@ namespace UltimateBadmintonBooker
                 termsToggle.Submit();
             } catch(Exception e)
             {
-                Console.WriteLine(e.Message);
+                Console.Error.WriteLine(e.Message + "\n" + e.StackTrace);
                 return false;
             }
 
@@ -165,15 +184,18 @@ namespace UltimateBadmintonBooker
             Parser.Default.ParseArguments<Options>(args)
                 .WithParsed(opts => Initialize(opts))
                 .WithNotParsed((errs) => HandleParseError(errs));
-
-            for (int i = 0; i < Options.CourtsToBook; i++)
+            Task[] tasks = new Task[Options.CourtsToBook];
+            for (int i = 0; i < tasks.Length; i++)
             {
                 var browser = new BrowserInstance(i, Options.UserNames[i], Options.Passwords[i]);
                 _instances.Add(browser);
-                browser.RunAsync();
+                tasks[i] = browser.RunAsync();
             }
 
             while (UpdateInput()) { };
+            for (int i = 0; i < tasks.Length; i++)
+                _instances[i].Interrupt();
+            Task.WaitAll(tasks);
         }
 
         static bool UpdateInput()
