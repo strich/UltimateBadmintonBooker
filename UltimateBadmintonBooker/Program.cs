@@ -132,6 +132,7 @@ namespace UltimateBadmintonBooker
 
         void Login()
         {
+            _driver.Manage().Timeouts().PageLoad = TimeSpan.FromSeconds(60);
             _driver.Url = LoginUrl();
             var usernameField = _driver.FindElement(By.XPath(".//*[@id='UserName']"));
             var passwordField = _driver.FindElement(By.XPath(".//*[@id='Password']"));
